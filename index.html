@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jogo da Memória</title>
+<style>
+  :root {
+    --bg: #fdf6ec;
+    --panel: #ffffff;
+    --text: #2b2b3a;
+    --muted: #7a7a8c;
+    --accent: #ff7a59;
+    --card-back: linear-gradient(135deg, #ff7a59, #ffb347);
+    --card-front: #ffffff;
+    --matched: #c8f2d4;
+    --shadow: 0 4px 14px rgba(0,0,0,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1b26;
+      --panel: #262636;
+      --text: #f1f1f6;
+      --muted: #a0a0b4;
+      --card-front: #33334a;
+      --matched: #2f5a3d;
+      --shadow: 0 4px 14px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+  }
+  h1 { margin: 0 0 4px; font-size: 1.8rem; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+
+  .controls, .stats {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    justify-content: center; margin-bottom: 14px;
+  }
+  button {
+    font: inherit; border: none; cursor: pointer;
+    padding: 8px 16px; border-radius: 999px;
+    background: var(--panel); color: var(--text);
+    box-shadow: var(--shadow);
+    transition: transform .1s;
+  }
+  button:hover { transform: translateY(-1px); }
+  button.active { background: var(--accent); color: #fff; }
+
+  .stat {
+    background: var(--panel); padding: 8px 14px; border-radius: 12px;
+    box-shadow: var(--shadow); min-width: 90px; text-align: center;
+  }
+  .stat b { display: block; font-size: 1.3rem; }
+  .stat span { font-size: .8rem; color: var(--muted); }
+
+  .board {
+    display: grid;
+    gap: 10px;
+    width: 100%;
+    max-width: 560px;
+  }
+  .card {
+    aspect-ratio: 1;
+    perspective: 600px;
+    cursor: pointer;
+  }
+  .inner {
+    position: relative; width: 100%; height: 100%;
+    transition: transform .45s;
+    transform-style: preserve-3d;
+  }
+  .card.flipped .inner, .card.matched .inner { transform: rotateY(180deg); }
+  .face {
+    position: absolute; inset: 0;
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    backface-visibility: hidden;
+    box-shadow: var(--shadow);
+    user-select: none;
+  }
+  .back { background: var(--card-back); color: #fff; font-size: 1.6rem; }
+  .front {
+    background: var(--card-front);
+    transform: rotateY(180deg);
+    font-size: clamp(1.4rem, 6vw, 2.6rem);
+  }
+  .card.matched .front { background: var(--matched); animation: pop .4s; }
+  @keyframes pop { 50% { transform: rotateY(180deg) scale(1.12); } }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    display: none; align-items: center; justify-content: center; padding: 16px;
+  }
+  .overlay.show { display: flex; }
+  .modal {
+    background: var(--panel); padding: 28px; border-radius: 18px;
+    text-align: center; max-width: 340px; width: 100%;
+    box-shadow: var(--shadow);
+  }
+  .modal h2 { margin-top: 0; font-size: 1.6rem; }
+  .modal button { background: var(--accent); color: #fff; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <h1>🎴 Jogo da Memória</h1>
+  <p class="sub">Vire as cartas e encontre todos os pares!</p>
+
+  <div class="controls" id="levels">
+    <button data-pairs="6">Fácil</button>
+    <button data-pairs="8" class="active">Médio</button>
+    <button data-pairs="12">Difícil</button>
+    <button id="restart">🔄 Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><b id="moves">0</b><span>jogadas</span></div>
+    <div class="stat"><b id="time">0:00</b><span>tempo</span></div>
+    <div class="stat"><b id="best">—</b><span>recorde</span></div>
+  </div>
+
+  <div class="board" id="board"></div>
+
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <h2>🎉 Parabéns!</h2>
+      <p id="result"></p>
+      <button id="again">Jogar de novo</button>
+    </div>
+  </div>
+
+<script>
+  const EMOJIS = ['🐶','🐱','🦊','🐼','🐸','🦁','🐵','🦄','🐙','🐢','🦋','🐝','🍕','🍩','🌵','🚀'];
+  const board = document.getElementById('board');
+  const movesEl = document.getElementById('moves');
+  const timeEl = document.getElementById('time');
+  const bestEl = document.getElementById('best');
+  const overlay = document.getElementById('overlay');
+
+  let pairs = 8, first = null, lock = false, moves = 0, matched = 0;
+  let seconds = 0, timer = null;
+
+  const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  const bestKey = () => `memoria-recorde-${pairs}`;
+
+  function loadBest() {
+    let b = null;
+    try { b = JSON.parse(localStorage.getItem(bestKey())); } catch {}
+    bestEl.textContent = b ? `${b.moves} / ${fmt(b.time)}` : '—';
+    return b;
+  }
+
+  function shuffle(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function newGame() {
+    clearInterval(timer); timer = null;
+    first = null; lock = false; moves = 0; matched = 0; seconds = 0;
+    movesEl.textContent = 0; timeEl.textContent = '0:00';
+    overlay.classList.remove('show');
+    loadBest();
+
+    const cols = pairs === 12 ? 6 : 4;
+    board.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+    const chosen = shuffle([...EMOJIS]).slice(0, pairs);
+    const deck = shuffle([...chosen, ...chosen]);
+    board.innerHTML = '';
+    deck.forEach(emoji => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.emoji = emoji;
+      card.innerHTML = `<div class="inner"><div class="face back">?</div><div class="face front">${emoji}</div></div>`;
+      card.addEventListener('click', () => flip(card));
+      board.appendChild(card);
+    });
+  }
+
+  function flip(card) {
+    if (lock || card === first || card.classList.contains('matched')) return;
+    if (!timer) timer = setInterval(() => { seconds++; timeEl.textContent = fmt(seconds); }, 1000);
+
+    card.classList.add('flipped');
+    if (!first) { first = card; return; }
+
+    moves++; movesEl.textContent = moves;
+    if (first.dataset.emoji === card.dataset.emoji) {
+      first.classList.add('matched'); card.classList.add('matched');
+      first = null; matched++;
+      if (matched === pairs) win();
+    } else {
+      lock = true;
+      const a = first; first = null;
+      setTimeout(() => {
+        a.classList.remove('flipped'); card.classList.remove('flipped');
+        lock = false;
+      }, 800);
+    }
+  }
+
+  function win() {
+    clearInterval(timer);
+    const best = loadBest();
+    const isRecord = !best || moves < best.moves || (moves === best.moves && seconds < best.time);
+    if (isRecord) {
+      try { localStorage.setItem(bestKey(), JSON.stringify({ moves, time: seconds })); } catch {}
+      loadBest();
+    }
+    document.getElementById('result').innerHTML =
+      `Você terminou em <b>${moves}</b> jogadas e <b>${fmt(seconds)}</b>.` +
+      (isRecord ? '<br>🏆 Novo recorde!' : '');
+    setTimeout(() => overlay.classList.add('show'), 500);
+  }
+
+  document.querySelectorAll('#levels [data-pairs]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#levels [data-pairs]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      pairs = Number(btn.dataset.pairs);
+      newGame();
+    });
+  });
+  document.getElementById('restart').addEventListener('click', newGame);
+  document.getElementById('again').addEventListener('click', newGame);
+
+  newGame();
+</script>
+</body>
+</html>
